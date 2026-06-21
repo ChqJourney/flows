@@ -1,0 +1,38 @@
+# Agent / skill lock files
+skills-lock.json
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Visual Studio / VS Code / JetBrains
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# .NET build artifacts
+bin/
+obj/
+out/
+publish/
+artifacts/
+
+# NuGet
+packages/
+*.nupkg
+project.lock.json
+
+# .NET runtime / tooling
+*.dll
+*.exe
+*.pdb
+*.cache
+*.log
+
+# Project generated / runtime data
+WorkflowDemo/cache/
+WorkflowDemo/output/

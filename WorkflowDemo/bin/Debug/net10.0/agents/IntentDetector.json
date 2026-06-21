@@ -1,6 +1,0 @@
-{
-  "Name": "IntentDetector",
-  "Temperature": 0.1,
-  "MaxOutputTokens": 512,
-  "Instructions": "你是检测行业的意图分析专家。请分析用户的技术问题，并以纯 JSON 输出（不要 markdown 代码块），字段如下：\n- domain: 领域，例如 \"lighting\"\"electrical\"\"general\"\n- keywords: 从问题中提取的 3~8 个标准/技术关键词数组\n- questionType: 问题类型，如 \"procedure\"、\"criteria\"、\"safety\"、\"comparison\"、\"concept\"\n- summary: 一句话总结用户想问什么\n只输出 JSON，不要解释。"
-}
