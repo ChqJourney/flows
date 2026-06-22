@@ -1,0 +1,86 @@
+@page "/standard/{id:int}/view"
+@rendermode InteractiveServer
+@inject StandardDbContext Db
+@inject MarkdownRendererService Renderer
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>@(record?.StandardNumber ?? "查看标准")</PageTitle>
+
+<div class="container">
+    @if (record == null)
+    {
+        <p>加载中...</p>
+    }
+    else
+    {
+        <div class="view-header">
+            <div>
+                <h1>@record.StandardNumber</h1>
+                @if (!string.IsNullOrWhiteSpace(record.TitleCn))
+                {
+                    <p class="subtitle">@record.TitleCn</p>
+                }
+            </div>
+            <div class="view-actions">
+                <a class="btn" href="/standard/@record.Id">详情</a>
+                <a class="btn" href="/">返回列表</a>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="alert alert-danger">@errorMessage</div>
+        }
+        else
+        {
+            <div id="markdown-view" class="markdown-body">
+                @((MarkupString)htmlContent)
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter]
+    public int Id { get; set; }
+
+    private StandardRecord? record;
+    private string htmlContent = "";
+    private string? errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        record = await Db.Standards.AsNoTracking().FirstOrDefaultAsync(s => s.Id == Id);
+        if (record == null)
+        {
+            Navigation.NavigateTo("/");
+            return;
+        }
+
+        try
+        {
+            htmlContent = Renderer.RenderToHtml(record);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"渲染 Markdown 失败：{ex.Message}";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !string.IsNullOrEmpty(htmlContent))
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("renderStandardMath", "markdown-view");
+            }
+            catch (Exception ex)
+            {
+                // KaTeX 渲染失败不影响正文显示
+                Console.WriteLine($"KaTeX 渲染失败: {ex.Message}");
+            }
+        }
+    }
+}

@@ -1,0 +1,375 @@
+@page "/"
+@rendermode InteractiveServer
+@inject StandardDbContext Db
+@inject StandardDomainService DomainService
+
+<PageTitle>标准库</PageTitle>
+
+<div class="container @(draggingStandardId.HasValue ? "is-dragging" : "")">
+    <h1>标准库</h1>
+
+    <div class="toolbar">
+        <input type="text" class="search-box" placeholder="搜索标准号..." @bind="searchText" @bind:event="oninput" />
+        <div class="toolbar-group">
+            @if (isCategoryMode)
+            {
+                <div class="domain-form">
+                    <input type="text" class="form-control" placeholder="新领域名称" @bind="newDomainName" @bind:event="oninput" @onkeydown="OnDomainNameKeyDown" />
+                    <button class="btn btn-primary" @onclick="CreateDomainAsync" disabled="@(!CanCreateDomain)">创建领域</button>
+                </div>
+                <button class="btn" @onclick="ExitCategoryMode">退出分类模式</button>
+            }
+            else
+            {
+                <button class="btn" @onclick="EnterCategoryMode">进入分类模式</button>
+                <a class="btn btn-primary" href="/upload">+ 上传标准</a>
+            }
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(message))
+    {
+        <div class="alert @(isError ? "alert-danger" : "alert-success")">@message</div>
+    }
+
+    @if (standards == null)
+    {
+        <p>加载中...</p>
+    }
+    else if (!standards.Any())
+    {
+        <div class="empty-state">
+            <p>还没有归档任何标准。</p>
+            <a class="btn btn-primary" href="/upload">上传第一个标准</a>
+        </div>
+    }
+    else if (!isCategoryMode)
+    {
+        <table class="standards-table">
+            <thead>
+                <tr>
+                    <th>标准号</th>
+                    <th>状态</th>
+                    <th>领域</th>
+                    <th>上传时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in standards)
+                {
+                    <tr>
+                        <td><strong>@s.StandardNumber</strong></td>
+                        <td><span class="status-badge status-@s.Status.ToString().ToLowerInvariant()">@s.StatusDisplay</span></td>
+                        <td>
+                            @if (s.Domain != null)
+                            {
+                                <span class="domain-badge">@s.Domain.Name</span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">-</span>
+                            }
+                        </td>
+                        <td>@s.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>
+                            <a class="btn btn-sm" href="/standard/@s.Id/view">查看</a>
+                            <a class="btn btn-sm" href="/standard/@s.Id">详情</a>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    else
+    {
+        <div class="category-layout">
+            <div class="unassigned-panel @(dropOverUnassigned ? "drag-over" : "")"
+                 @ondragover:preventDefault
+                 @ondragover="OnDragOverUnassigned"
+                 @ondragleave="OnDragLeave"
+                 @ondrop="() => OnDropAsync(null)">
+                <div class="panel-header">
+                    <h3>未分类标准</h3>
+                    <span class="panel-count">@unassignedStandards.Count 个</span>
+                </div>
+                <p class="panel-hint">把标准拖到这里可取消归类</p>
+                @if (!unassignedStandards.Any())
+                {
+                    <div class="panel-empty">暂无未分类标准</div>
+                }
+                else
+                {
+                    <table class="standards-table standards-table-compact">
+                        <thead>
+                            <tr>
+                                <th>标准号</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var s in unassignedStandards)
+                            {
+                                <tr draggable="true"
+                                    class="drag-row @(draggingStandardId == s.Id ? "dragging" : "")"
+                                    @ondragstart="() => OnDragStart(s.Id)"
+                                    @ondragend="OnDragEnd">
+                                    <td><strong>@s.StandardNumber</strong></td>
+                                    <td><span class="status-badge status-@s.Status.ToString().ToLowerInvariant()">@s.StatusDisplay</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+
+            <div class="domain-panel">
+                @foreach (var domain in domains)
+                {
+                    var assigned = standardsByDomain.GetValueOrDefault(domain.Id, []);
+                    <div class="domain-card @(dropOverDomainId == domain.Id ? "drag-over" : "")"
+                         @ondragover:preventDefault
+                         @ondragover="() => OnDragOverDomain(domain.Id)"
+                         @ondragleave="OnDragLeave"
+                         @ondrop="() => OnDropAsync(domain.Id)">
+                        <div class="domain-header">
+                            <strong>@domain.Name</strong>
+                            <div class="domain-actions">
+                                <span class="domain-count">@assigned.Count 个标准</span>
+                                <button class="btn btn-sm btn-danger" @onclick="() => DeleteDomainAsync(domain.Id)" title="删除领域">×</button>
+                            </div>
+                        </div>
+                        <div class="domain-standards">
+                            @{
+                                var groups = assigned
+                                    .GroupBy(s => s.BaseStandardNumber)
+                                    .OrderBy(g => g.Key)
+                                    .ToList();
+                            }
+                            @foreach (var group in groups)
+                            {
+                                <div class="standard-group">
+                                    <div class="standard-group-header">
+                                        @(string.IsNullOrWhiteSpace(group.Key) ? "未识别标准" : group.Key)
+                                    </div>
+                                    <div class="standard-group-versions">
+                                        @foreach (var s in group.OrderByDescending(v => v.Version))
+                                        {
+                                            <div draggable="true"
+                                                 class="version-chip @(draggingStandardId == s.Id ? "dragging" : "")"
+                                                 @ondragstart="() => OnDragStart(s.Id)"
+                                                 @ondragend="OnDragEnd"
+                                                 title="@s.StandardNumber">
+                                                <span class="version-chip-version">@(string.IsNullOrWhiteSpace(s.Version) ? "未知版本" : s.Version)</span>
+                                                <span class="status-badge status-@s.Status.ToString().ToLowerInvariant()">@s.StatusDisplay</span>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                            @if (!groups.Any())
+                            {
+                                <div class="domain-empty">把标准拖到这里</div>
+                            }
+                        </div>
+                    </div>
+                }
+                @if (!domains.Any())
+                {
+                    <div class="notice">
+                        <p>还没有领域分类。</p>
+                        <p>在上方输入名称并“创建领域”后开始归类。</p>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<StandardRecord>? standards;
+    private List<StandardDomain> domains = [];
+    private bool isCategoryMode;
+    private int? draggingStandardId;
+    private bool dropOverUnassigned;
+    private int? dropOverDomainId;
+    private string? newDomainName;
+    private string? message;
+    private bool isError;
+
+    private string _searchText = "";
+
+    private string searchText
+    {
+        get => _searchText;
+        set
+        {
+            _searchText = value;
+            _ = LoadAsync();
+        }
+    }
+
+    private bool CanCreateDomain => !string.IsNullOrWhiteSpace(newDomainName);
+
+    private List<StandardRecord> unassignedStandards =>
+        standards?.Where(s => s.DomainId == null).ToList() ?? [];
+
+    private Dictionary<int, List<StandardRecord>> standardsByDomain =>
+        standards?.Where(s => s.DomainId.HasValue)
+                  .GroupBy(s => s.DomainId!.Value)
+                  .ToDictionary(g => g.Key, g => g.ToList()) ?? [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var query = Db.Standards
+            .AsNoTracking()
+            .Include(s => s.Domain)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var keyword = _searchText.Trim();
+            query = query.Where(s =>
+                s.StandardNumber.Contains(keyword) ||
+                s.StandardNumberSlug.Contains(keyword));
+        }
+
+        standards = await query
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+
+        if (isCategoryMode)
+        {
+            domains = await DomainService.ListAsync();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task EnterCategoryMode()
+    {
+        isCategoryMode = true;
+        await LoadAsync();
+    }
+
+    private void ExitCategoryMode()
+    {
+        isCategoryMode = false;
+        domains = [];
+        message = null;
+        newDomainName = null;
+        ClearDragState();
+    }
+
+    private async Task CreateDomainAsync()
+    {
+        if (!CanCreateDomain) return;
+
+        try
+        {
+            await DomainService.CreateAsync(newDomainName!);
+            newDomainName = "";
+            await LoadAsync();
+            ShowMessage("领域创建成功。", false);
+        }
+        catch (Exception ex)
+        {
+            ShowMessage($"创建失败：{ex.Message}", true);
+        }
+    }
+
+    private async Task OnDomainNameKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && CanCreateDomain)
+        {
+            await CreateDomainAsync();
+        }
+    }
+
+    private async Task DeleteDomainAsync(int id)
+    {
+        try
+        {
+            var deleted = await DomainService.DeleteAsync(id);
+            if (deleted)
+            {
+                await LoadAsync();
+                ShowMessage("领域已删除，下属标准已恢复未分类。", false);
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowMessage($"删除失败：{ex.Message}", true);
+        }
+    }
+
+    private void OnDragStart(int standardId)
+    {
+        draggingStandardId = standardId;
+    }
+
+    private void OnDragEnd()
+    {
+        ClearDragState();
+    }
+
+    private void OnDragOverUnassigned()
+    {
+        if (!dropOverUnassigned)
+        {
+            dropOverUnassigned = true;
+            dropOverDomainId = null;
+        }
+    }
+
+    private void OnDragOverDomain(int domainId)
+    {
+        if (dropOverDomainId != domainId)
+        {
+            dropOverDomainId = domainId;
+            dropOverUnassigned = false;
+        }
+    }
+
+    private void OnDragLeave()
+    {
+        dropOverUnassigned = false;
+        dropOverDomainId = null;
+    }
+
+    private async Task OnDropAsync(int? domainId)
+    {
+        var sid = draggingStandardId;
+        ClearDragState();
+
+        if (sid is not int standardId) return;
+
+        try
+        {
+            await DomainService.AssignStandardAsync(standardId, domainId);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowMessage($"归类失败：{ex.Message}", true);
+        }
+    }
+
+    private void ClearDragState()
+    {
+        draggingStandardId = null;
+        dropOverUnassigned = false;
+        dropOverDomainId = null;
+    }
+
+    private void ShowMessage(string text, bool error)
+    {
+        message = text;
+        isError = error;
+    }
+}

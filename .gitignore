@@ -36,3 +36,8 @@ project.lock.json
 # Project generated / runtime data
 WorkflowDemo/cache/
 WorkflowDemo/output/
+
+.agents
+standards/
+lib/
+*.db

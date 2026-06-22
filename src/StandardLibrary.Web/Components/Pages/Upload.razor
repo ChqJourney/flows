@@ -1,0 +1,192 @@
+@page "/upload"
+@rendermode InteractiveServer
+@inject StandardArchiveService ArchiveService
+@inject NavigationManager Navigation
+
+<PageTitle>上传标准</PageTitle>
+
+<div class="container">
+    <h1>上传标准</h1>
+
+    <div class="notice">
+        <p>请先将 PDF 标准转换为 Markdown 格式，打包成 <strong>zip</strong> 文件上传。</p>
+        <p>zip 包内需包含一个 <code>.md</code> 文件，以及可选的 <code>images/</code> 图片文件夹。</p>
+    </div>
+
+    <EditForm Model="request" OnValidSubmit="HandleSubmit">
+        <DataAnnotationsValidator />
+
+        <div class="form-group">
+            <label>上传 zip 包 <span class="required">*</span></label>
+            <InputFile class="form-control" OnChange="LoadFiles" accept=".zip" />
+            @if (selectedFile != null)
+            {
+                <span class="file-hint">已选择: @selectedFile.Name (@(selectedFile.Size / 1024) KB)</span>
+            }
+        </div>
+
+        <div class="form-group">
+            <label>标准号 <span class="required">*</span></label>
+            <InputText class="form-control" @bind-Value="request.StandardNumber" @bind-Value:after="OnStandardNumberChanged" placeholder="例如 GB/T 1234.1-2020" />
+            <span class="file-hint">可从 zip 文件名自动识别，支持手动修改</span>
+        </div>
+
+        <div class="form-group">
+            <label>基础标准号（用于多版本归组）</label>
+            <InputText class="form-control" @bind-Value="request.BaseStandardNumber" placeholder="例如 GB/T 1234.1" />
+            <span class="file-hint">会自动从标准号推导，不同版本的相同标准请保持此值一致</span>
+        </div>
+
+        <div class="form-group">
+            <label>状态</label>
+            <InputSelect class="form-control" @bind-Value="request.Status">
+                @foreach (var status in Enum.GetValues<StandardStatus>())
+                {
+                    <option value="@status">@GetStatusDisplay(status)</option>
+                }
+            </InputSelect>
+        </div>
+
+        @if (duplicateInfo != null)
+        {
+            <div class="alert alert-warning">
+                <strong>检测到重复</strong>
+                @if (duplicateInfo.Type == DuplicateType.FileHash)
+                {
+                    <p>该文件已作为 <a href="/standard/@duplicateInfo.Id">@duplicateInfo.StandardNumber</a> 上传。</p>
+                    <p>如果确认这是同一标准但标准号填写不同，可以继续上传。</p>
+                }
+                else
+                {
+                    <p>标准号 <a href="/standard/@duplicateInfo.Id">@duplicateInfo.StandardNumber</a> 已存在。</p>
+                    <p>如果确认要覆盖或保留另一份副本，可以继续上传。</p>
+                }
+                <button type="button" class="btn btn-warning" @onclick="ConfirmUpload" disabled="@isSubmitting">
+                    @(isSubmitting ? "上传中..." : "确认继续上传")
+                </button>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(message))
+        {
+            <div class="alert @(isError ? "alert-danger" : "alert-success")">
+                @message
+            </div>
+        }
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary" disabled="@(isSubmitting || duplicateInfo != null)">
+                @(isSubmitting ? "上传中..." : "上传并归档")
+            </button>
+            <a class="btn" href="/">取消</a>
+        </div>
+    </EditForm>
+</div>
+
+@code {
+    private StandardUploadRequest request = new();
+    private IBrowserFile? selectedFile;
+    private string? message;
+    private bool isError;
+    private bool isSubmitting;
+    private DuplicateInfo? duplicateInfo;
+    private string? lastAutoBase;
+
+    private void LoadFiles(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+        message = null;
+        duplicateInfo = null;
+
+        // 自动从文件名提取标准号，并推导基础标准号
+        request.StandardNumber = StandardSlugService.StandardNumberFromFileName(selectedFile.Name);
+        request.BaseStandardNumber = StandardSlugService.ExtractBaseStandardNumber(request.StandardNumber);
+        lastAutoBase = request.BaseStandardNumber;
+    }
+
+    private void OnStandardNumberChanged()
+    {
+        var computed = StandardSlugService.ExtractBaseStandardNumber(request.StandardNumber);
+        if (string.IsNullOrWhiteSpace(request.BaseStandardNumber) || request.BaseStandardNumber == lastAutoBase)
+        {
+            request.BaseStandardNumber = computed;
+        }
+        lastAutoBase = computed;
+    }
+
+    private async Task HandleSubmit()
+    {
+        await DoUpload(skipDuplicateCheck: false);
+    }
+
+    private async Task ConfirmUpload()
+    {
+        await DoUpload(skipDuplicateCheck: true);
+    }
+
+    private async Task DoUpload(bool skipDuplicateCheck)
+    {
+        if (selectedFile == null)
+        {
+            message = "请先选择 zip 文件";
+            isError = true;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.StandardNumber))
+        {
+            message = "请填写标准号";
+            isError = true;
+            return;
+        }
+
+        isSubmitting = true;
+        message = null;
+        duplicateInfo = null;
+
+        try
+        {
+            await using var stream = selectedFile.OpenReadStream(maxAllowedSize: 500 * 1024 * 1024);
+            var result = await ArchiveService.ArchiveFromZipAsync(request, stream, skipDuplicateCheck);
+
+            if (result.IsDuplicate)
+            {
+                duplicateInfo = new DuplicateInfo(result.DuplicateType, result.ExistingId, result.ExistingStandardNumber);
+                message = null;
+                isError = false;
+            }
+            else if (result.Success)
+            {
+                message = $"标准 {result.Record!.StandardNumber} 归档成功";
+                isError = false;
+                request = new StandardUploadRequest();
+                selectedFile = null;
+            }
+            else
+            {
+                message = $"归档失败：{result.ErrorMessage}";
+                isError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            message = $"归档失败：{ex.Message}";
+            isError = true;
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private record DuplicateInfo(DuplicateType Type, int Id, string StandardNumber);
+
+    private static string GetStatusDisplay(StandardStatus status) => status switch
+    {
+        StandardStatus.Current => "现行",
+        StandardStatus.Superseded => "被替代",
+        StandardStatus.Repealed => "废止",
+        StandardStatus.Draft => "草案",
+        _ => status.ToString()
+    };
+}
